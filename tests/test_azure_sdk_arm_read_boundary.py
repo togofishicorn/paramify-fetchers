@@ -311,3 +311,25 @@ def test_one_backslash_cannot_change_scoped_path_interpretation(scoped):
     with pytest.raises(ValueError):
         arm.get_json(scoped, path)
     scoped.send_request.assert_not_called()
+
+
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE", "POST"])
+def test_generated_sdk_blocks_source_writes_before_token_or_transport(scoped, method):
+    import azure_common
+    from azure.core.rest import HttpRequest
+    from azure.mgmt.msi import ManagedServiceIdentityClient
+
+    transport, cred, calls, tokens = recording_transport([(200, {})])
+    api = ManagedServiceIdentityClient(
+        credential=cred,
+        subscription_id=SUB,
+        transport=transport,
+        **azure_common.arm_client_kwargs(),
+    )
+    with pytest.raises(ValueError, match="read"):
+        api._client.send_request(
+            HttpRequest(
+                method, HOST + "/subscriptions/" + SUB + "/providers/example/items"
+            )
+        )
+    assert calls == [] and tokens == []

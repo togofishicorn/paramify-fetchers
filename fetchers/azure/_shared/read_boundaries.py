@@ -74,6 +74,10 @@ def validate_sdk_arm_request(request, endpoint: str, scope: str) -> None:
                 "ARM read scope: Resource Graph requires exactly the explicit subscription"
             )
         return
+    if request.method.upper() != "GET":
+        raise ValueError(
+            "ARM read boundary permits GET or the explicit Resource Graph read POST only"
+        )
     validate_read_url(url, endpoint, scope)
 
 

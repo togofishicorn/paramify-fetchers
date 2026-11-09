@@ -10,6 +10,10 @@ schemas and the `paramify` CLI — not the internal code.
 
 ## [Unreleased]
 
+### Changed
+
+- Entra application and service-principal Fetchers 0.3.0 require explicit object-ID selections. Primary and related reads stay within those selections, with unknown context retained. See [selection and completeness](docs/entra-selected-identities.md).
+
 ### Added
 
 - VNet routing, private DNS, Application Gateway WAF, alert rules, Activity Log

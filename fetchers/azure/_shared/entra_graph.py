@@ -9,6 +9,7 @@ msgraph imports are lazy, keeping the pure transforms standard-library-only.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -66,6 +67,51 @@ def graph_host() -> str:
 def graph_scope() -> str:
     """OAuth scope for the Graph host. Always `<host>/.default` for app auth."""
     return f"{graph_host()}/.default"
+
+
+# Explicit object selection is validated before credentials or Graph construction.
+APPLICATION_OBJECT_IDS_ENV = "AZURE_ENTRA_APPLICATION_OBJECT_IDS"
+SERVICE_PRINCIPAL_OBJECT_IDS_ENV = "AZURE_ENTRA_SERVICE_PRINCIPAL_OBJECT_IDS"
+
+
+def selected_object_ids(collector, env: str, *, allow_empty: bool = False) -> list[str] | None:
+    """Parse a required JSON UUID array. Never silently broaden an invalid selection."""
+    try:
+        raw = os.environ.get(env)
+        if raw is None:
+            raise ValueError("required JSON UUID array is missing")
+        values = json.loads(raw)
+        if not isinstance(values, list) or (not values and not allow_empty):
+            raise ValueError("expected a nonempty JSON UUID array" if not allow_empty else "expected a JSON UUID array")
+        result = []
+        for value in values:
+            if not isinstance(value, str):
+                raise ValueError("each object ID must be a UUID string")
+            parsed = UUID(value)
+            if not parsed.int or str(parsed) != value.lower():
+                raise ValueError("each object ID must be a non-nil, hyphenated UUID")
+            result.append(str(parsed))
+        if len(set(result)) != len(result):
+            raise ValueError("duplicate object IDs")
+        return result
+    except (ValueError, TypeError) as exc:
+        collector.record(f"config {env}", ValueError(f"invalid setting {env}: {exc}"))
+        return None
+
+
+def selected_scope(application_ids: list[str], service_principal_ids: list[str]) -> dict:
+    return {"mode": "selected_objects", "application_object_ids": application_ids,
+            "service_principal_object_ids": service_principal_ids}
+
+
+async def selected_object(collector, operation: str, builder, object_id: str, config=None):
+    """GET an explicitly selected object; missing or mismatched primary IDs fail closed."""
+    async def read():
+        model = await builder.get(request_configuration=config)
+        if model is None or str(graph_attr(model, "id") or "").lower() != object_id.lower():
+            raise ValueError("selected object response is missing or has a different primary ID")
+        return model
+    return await aguard(collector, operation, read)
 
 
 # --------------------------------------------------------------------------- #
@@ -388,6 +434,7 @@ async def paginate(
     request_configuration=None,
     page_limit: int = 1000,
     raise_on_error: bool = False,
+    expected_path: str | None = None,
 ) -> List[Any]:
     """Follow `@odata.nextLink` to the end and return every item.
 
@@ -418,6 +465,12 @@ async def paginate(
             if (target.scheme != "https" or target.netloc.lower() != origin.netloc.lower()
                     or target.username is not None or target.password is not None or target.fragment):
                 raise ValueError("Graph continuation is outside the configured source origin")
+            if expected_path is not None:
+                # Selection-aware callers pin the related collection, while query
+                # paging tokens remain free to change. Other callers retain native behavior.
+                path = "/" + "/".join(part for part in target.path.split("/") if part)
+                if path.lower() != expected_path.lower():
+                    raise ValueError("Graph continuation is outside the selected object collection")
             if pages >= page_limit:
                 collector.record(
                     operation,

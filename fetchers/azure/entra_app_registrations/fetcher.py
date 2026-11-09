@@ -2,7 +2,7 @@
 """
 Microsoft Entra ID app registration credentials and their expiry
 
-Every app registration's client secrets and certificate credentials with each expiry, so
+Each selected app registration's client secrets and certificate credentials with each expiry, so
 rotation is evidenceable per credential. A null `endDateTime` never appears in an
 "expiring soon" report by construction, so it is counted separately and never folded
 into expired or expiring-soon.
@@ -37,9 +37,12 @@ from azure_common import (  # noqa: E402
 )
 from azure_rest import bounded_int_config  # noqa: E402
 from entra_graph import (  # noqa: E402
+    APPLICATION_OBJECT_IDS_ENV,
     graph_attr,
-    paginate,
     resolve_tenant,
+    selected_object,
+    selected_object_ids,
+    selected_scope,
     tenant_filename_key,
     tenant_payload,
     tenant_scoping,
@@ -312,8 +315,8 @@ def summarize(
 
 # --- collection (lazy msgraph imports) ---
 
-async def _collect(collector: Collector, cred, now: datetime, approved_days: int) -> tuple[list[dict], dict, bool]:
-    """One applications.get() with a $select projection, paged to the end.
+async def _collect(collector: Collector, cred, now: datetime, approved_days: int, application_ids: list[str]) -> tuple[list[dict], dict, bool]:
+    """Read each explicitly selected application with a $select projection.
 
     The third value is False when the applications read failed or stopped part-way."""
 
@@ -321,22 +324,24 @@ async def _collect(collector: Collector, cred, now: datetime, approved_days: int
         tenant = await resolve_tenant(collector, client)
 
         from kiota_abstractions.base_request_configuration import RequestConfiguration
-        from msgraph.generated.applications.applications_request_builder import (
-            ApplicationsRequestBuilder,
+        from msgraph.generated.applications.item.application_item_request_builder import (
+            ApplicationItemRequestBuilder,
         )
 
         request_configuration = RequestConfiguration(
-            query_parameters=ApplicationsRequestBuilder.ApplicationsRequestBuilderGetQueryParameters(
+            query_parameters=ApplicationItemRequestBuilder.ApplicationItemRequestBuilderGetQueryParameters(
                 select=list(APP_SELECT)
             )
         )
         failures_before = len(collector.failures)
-        raw_apps = await paginate(
-            collector,
-            "graph.applications.get",
-            client.applications,
-            request_configuration,
-        )
+        raw_apps = []
+        for oid in application_ids:
+            model = await selected_object(
+                collector, f"graph.applications({oid}).get", client.applications.by_application_id(oid),
+                oid, request_configuration,
+            )
+            if model is not None:
+                raw_apps.append(model)
         complete = len(collector.failures) == failures_before
         apps = [application_record(project_application(a), now, approved_days) for a in raw_apps]
         logger.info(
@@ -376,13 +381,14 @@ def main() -> int:
         collector, APPROVED_LIFETIME_ENV, DEFAULT_APPROVED_LIFETIME_DAYS, MAX_APPROVED_LIFETIME_DAYS
     )
 
-    cred = collector.guard("azure.identity.DefaultAzureCredential", credential)
+    application_ids = selected_object_ids(collector, APPLICATION_OBJECT_IDS_ENV)
+    cred = collector.guard("azure.identity.DefaultAzureCredential", credential) if collector.ok else None
     if cred is None:
         apps: list[dict] = []
         tenant = {"tenant_source": "unresolved"}
         read_complete = False
     else:
-        apps, tenant, read_complete = asyncio.run(_collect(collector, cred, now, approved_days))
+        apps, tenant, read_complete = asyncio.run(_collect(collector, cred, now, approved_days, application_ids))
 
     # No `provider_registration_status()` call, deliberately: Graph is not an ARM
     # resource provider, and a tenant with no app registrations genuinely has none.
@@ -396,6 +402,14 @@ def main() -> int:
         results={"app_registrations": apps, "evaluated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ")},
         summary=summarize(apps, approved_days, read_complete),
     )
+
+    evidence["metadata"]["collection_scope"] = selected_scope(application_ids or [], [])
+    evidence["metadata"]["collection_completeness"] = {
+        "selected_primary_reads_complete": read_complete,
+    }
+
+    if not read_complete:
+        evidence["summary"]["credential_rotation_compliance_percentage"] = None
 
     filename = f"azure_entra_app_registrations_{tenant_filename_key(tenant)}.json"
     path = write_evidence(output_dir, filename, evidence)

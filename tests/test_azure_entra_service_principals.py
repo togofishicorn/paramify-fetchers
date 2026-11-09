@@ -123,54 +123,67 @@ class Builder:
 
 
 class Collection:
-    """`client.service_principals` / `client.applications`: one builder per $expand."""
-
-    def __init__(self, by_expand, items):
-        self.by_expand, self.items = by_expand, items
-
+    """Tenant-wide reads are forbidden, including expanded reads."""
     async def get(self, request_configuration=None):
-        query = getattr(request_configuration, "query_parameters", None)
-        expand = (getattr(query, "expand", None) or [""])[0].split("(")[0]
-        return await self.by_expand[expand].get(request_configuration)
+        raise AssertionError("unexpected tenant-wide Graph collection read")
 
 
 class FakeGraph:
     def __init__(self, service_principals, applications, sp_owners=None, app_owners=None,
                  assignments=None, grants=()):
         sp_owners, app_owners, assignments = sp_owners or {}, app_owners or {}, assignments or {}
+        self.selected_principals = [s.id for s in service_principals]
+        self.selected_applications = [a.id for a in applications]
         self.organization = Builder([ns(id=TENANT, display_name="Contoso", verified_domains=[])])
-        self.sp_owner_items = {k: Builder(v) for k, v in sp_owners.items()}
-        self.app_owner_items = {k: Builder(v) for k, v in app_owners.items()}
-        self.sp_owners = Builder([ns(id=s.id, owners=sp_owners.get(s.id, [])[:20]) for s in service_principals])
-        self.app_owners = Builder([ns(id=a.id, owners=app_owners.get(a.id, [])[:20]) for a in applications])
-        self.assignments = Builder(
-            [ns(id=s.id, app_role_assignments=assignments.get(s.id, [])[:20]) for s in service_principals]
-        )
-        self.assignment_items = {k: Builder(v) for k, v in assignments.items()}
+        self.sp_owner_items = {s.id: Builder(sp_owners.get(s.id, [])) for s in service_principals}
+        self.app_owner_items = {a.id: Builder(app_owners.get(a.id, [])) for a in applications}
+        self.assignment_items = {s.id: Builder(assignments.get(s.id, [])) for s in service_principals}
+        self.fic_items = {a.id: Builder(a.federated_identity_credentials) for a in applications}
+        self.sp_owners, self.app_owners, self.assignments = Builder(), Builder(), Builder()
+        self.oauth2_permission_grants = Builder(grants)  # error controls scoped grants only
+        self.grant_items = {s.id: Builder([g for g in grants if g.client_id == s.id]) for s in service_principals}
         self.resource_error = {}
-        self.service_principals = Collection(
-            {"": Builder(service_principals), "owners": self.sp_owners, "appRoleAssignments": self.assignments},
-            service_principals,
-        )
-        self.applications = Collection(
-            {"federatedIdentityCredentials": Builder(applications), "owners": self.app_owners}, applications
-        )
+        self.primary_error = {}
+        self.service_principals, self.applications = Collection(), Collection()
         by_id = {s.id: s for s in service_principals}
-        self.resource_reads = []
+        apps_by_id = {a.id: a for a in applications}
+        self.resource_reads, self.primary_reads = [], []
 
         async def resource_get(oid, request_configuration=None):
-            self.resource_reads.append(oid)
-            if oid in self.resource_error:
-                raise self.resource_error[oid]
-            return by_id[oid]
+            select = request_configuration.query_parameters.select
+            if "appRoles" in select:
+                self.resource_reads.append(oid)
+                if oid in self.resource_error:
+                    raise self.resource_error[oid]
+            else:
+                self.primary_reads.append(("service_principals", oid))
+                if oid in self.primary_error:
+                    raise self.primary_error[oid]
+            return by_id.get(oid)
+
+        async def app_get(oid, request_configuration=None):
+            self.primary_reads.append(("applications", oid))
+            if oid in self.primary_error:
+                raise self.primary_error[oid]
+            return apps_by_id.get(oid)
+
+        def related(oid, items, shared):
+            builder = items[oid]
+            if shared.error is not None:
+                builder.error = shared.error
+            return builder
 
         self.service_principals.by_service_principal_id = lambda oid: ns(
-            owners=self.sp_owner_items.get(oid, Builder()),
-            app_role_assignments=self.assignment_items.get(oid, Builder()),
+            owners=related(oid, self.sp_owner_items, self.sp_owners),
+            app_role_assignments=related(oid, self.assignment_items, self.assignments),
+            oauth2_permission_grants=related(oid, self.grant_items, self.oauth2_permission_grants),
             get=lambda request_configuration=None: resource_get(oid, request_configuration),
         )
-        self.applications.by_application_id = lambda oid: ns(owners=self.app_owner_items.get(oid, Builder()))
-        self.oauth2_permission_grants = Builder(grants)
+        self.applications.by_application_id = lambda oid: ns(
+            owners=related(oid, self.app_owner_items, self.app_owners),
+            federated_identity_credentials=self.fic_items[oid],
+            get=lambda request_configuration=None: app_get(oid, request_configuration),
+        )
 
 
 class Query:
@@ -181,7 +194,7 @@ class Query:
 def _stub_msgraph(monkeypatch):
     """Stand in for the msgraph request builders the fetcher imports lazily."""
     builders = {
-        "msgraph.generated.applications.applications_request_builder": "ApplicationsRequestBuilder",
+        "msgraph.generated.applications.item.application_item_request_builder": "ApplicationItemRequestBuilder",
         "msgraph.generated.service_principals.service_principals_request_builder": "ServicePrincipalsRequestBuilder",
         "msgraph.generated.applications.item.owners.owners_request_builder": "OwnersRequestBuilder",
         "msgraph.generated.service_principals.item.owners.owners_request_builder": "OwnersRequestBuilder",
@@ -203,6 +216,10 @@ def _run(monkeypatch, tmp_path, graph):
         return await work(graph)
 
     _stub_msgraph(monkeypatch)
+    # Historical native regression models use readable symbolic IDs. Selection validation
+    # itself is exercised with actual synthetic UUIDs in the boundary tests.
+    monkeypatch.setattr(sps, "selected_object_ids", lambda collector, env, **kw:
+                        graph.selected_applications if env == sps.APPLICATION_OBJECT_IDS_ENV else graph.selected_principals)
     monkeypatch.setattr(sps, "with_graph_client", fake_with_graph_client)
     monkeypatch.setattr(sps, "credential", lambda: object())
     monkeypatch.setattr(sps, "load_dotenv", lambda: None)
@@ -447,42 +464,20 @@ def test_only_disabled_owners_and_unread_owner_state(monkeypatch, tmp_path):
     assert evidence["summary"]["service_principals_with_only_disabled_owners"] is None
 
 
-def test_a_principal_missing_from_the_second_pass_reads_unknown(monkeypatch, tmp_path):
+def test_a_selected_principal_deleted_before_related_reads_fails_closed(monkeypatch, tmp_path):
     graph = FakeGraph(**_tenant())
-    # Deleted between the principal list and the owner and assignment reads.
-    for second_pass in (graph.sp_owners, graph.assignments):
-        second_pass.items = [o for o in second_pass.items if o.id != "sp-orphan"]
-    code, evidence, _ = _run(monkeypatch, tmp_path, graph)
-
-    assert code == 0
-    orphan = {r["id"]: r for r in evidence["results"]["service_principals"]}["sp-orphan"]
-    assert orphan["owners"] is None and orphan["has_owner"] is None
-    assert orphan["application_permissions"] is None and orphan["has_privileged_permission"] is None
-    # Unknown, so not counted as ownerless; the vendor app still is.
-    assert evidence["summary"]["service_principals_without_owner"] == 1
-
-
-def test_a_principal_deleted_before_its_re_read_reads_unknown_alone(monkeypatch, tmp_path):
-    tenant = _tenant()
-    tenant["sp_owners"] = {"sp-orphan": [_user(f"u-{i}") for i in range(21)]}
-    tenant["assignments"]["sp-mi"] = [_assignment(ROLE_DIR_RW) for _ in range(21)]
-    graph = FakeGraph(**tenant)
-    gone = _api_error(404, "Resource 'sp' does not exist or one of its queried reference-property objects are not present.")
+    gone = _api_error(404, "Selected object was deleted")
     graph.sp_owner_items["sp-orphan"].error = gone
     graph.assignment_items["sp-mi"].error = gone
     code, evidence, _ = _run(monkeypatch, tmp_path, graph)
-
-    assert code == 0
-    assert evidence["metadata"]["api_failures"] == []
-    summary = evidence["summary"]
-    assert summary["owners_readable"] is True and summary["application_permissions_readable"] is True
+    assert code == 1
+    assert evidence["metadata"]["api_failures"]
+    assert evidence["summary"]["owners_readable"] is False
+    assert evidence["summary"]["application_permissions_readable"] is False
     by_id = {r["id"]: r for r in evidence["results"]["service_principals"]}
-    assert by_id["sp-orphan"]["owners"] is None and by_id["sp-orphan"]["has_owner"] is None
-    assert by_id["sp-mi"]["application_permissions"] is None
-    # Every other principal keeps its answer.
+    assert by_id["sp-orphan"]["owners"] is None
     assert by_id["sp-owned"]["has_owner"] is True
-    assert by_id["sp-vendor"]["has_owner"] is False
-    assert by_id["sp-orphan"]["privileged_application_permissions"] == ["RoleManagement.ReadWrite.Directory"]
+    assert evidence["metadata"]["collection_completeness"]["selected_related_reads_complete"] is False
 
 
 def test_owners_past_the_expand_limit_are_read_per_object(monkeypatch, tmp_path):
@@ -522,19 +517,13 @@ def test_assignments_past_the_expand_limit_are_read_per_object(monkeypatch, tmp_
     assert by_id["sp-mi"]["privileged_application_permissions"] == ["Directory.ReadWrite.All"]
 
 
-def test_an_expanded_assignment_without_its_resource_is_read_per_object(monkeypatch, tmp_path):
+def test_assignments_are_always_read_from_the_selected_object(monkeypatch, tmp_path):
     graph = FakeGraph(**_tenant())
-    for sp in graph.assignments.items:
-        if sp.id == "sp-orphan":
-            sp.app_role_assignments = [ns(**{**vars(a), "resource_id": None, "resource_display_name": None})
-                                       for a in sp.app_role_assignments]
     code, evidence, _ = _run(monkeypatch, tmp_path, graph)
-
     assert code == 0
-    by_id = {r["id"]: r for r in evidence["results"]["service_principals"]}
-    (perm,) = by_id["sp-orphan"]["application_permissions"]
-    assert perm["permission"] == "RoleManagement.ReadWrite.Directory"
-    assert perm["privileged"] is True
+    assert graph.assignment_items["sp-orphan"].calls == 1
+    record = next(r for r in evidence["results"]["service_principals"] if r["id"] == "sp-orphan")
+    assert record["application_permissions"][0]["permission"] == "RoleManagement.ReadWrite.Directory"
 
 
 def test_denied_owner_read_fails_the_run_with_null_owner_figures(monkeypatch, tmp_path):

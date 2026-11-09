@@ -123,7 +123,7 @@ def documented_summary(fetcher: str) -> Dict[str, list[str]]:
     fields: Dict[str, list[str]] = {}
     field = None
     for line in section.splitlines():
-        if m := re.match(r"- (\S+) — ", line):
+        if m := re.match(r"- (\S+) (?:\u2014|-) ", line):
             field = m.group(1)
             fields[field] = []
         elif field and (m := re.match(r"  - (\S+) \(", line)):

@@ -138,19 +138,20 @@ def _run(monkeypatch, tmp_path, graph_get, applications=None):
         def __init__(self, **kw):
             pass
 
-    builders = ModuleType("msgraph.generated.applications.applications_request_builder")
-    builders.ApplicationsRequestBuilder = type("B", (), {"ApplicationsRequestBuilderGetQueryParameters": Query})
+    builders = ModuleType("msgraph.generated.applications.item.application_item_request_builder")
+    builders.ApplicationItemRequestBuilder = type("B", (), {"ApplicationItemRequestBuilderGetQueryParameters": Query})
     config = ModuleType("kiota_abstractions.base_request_configuration")
     config.RequestConfiguration = lambda query_parameters=None: ns(query_parameters=query_parameters)
     monkeypatch.setitem(sys.modules, builders.__name__, builders)
     monkeypatch.setitem(sys.modules, config.__name__, config)
 
     async def fake_with_graph_client(collector, cred, work, default=None):
-        return await work(ns(applications=applications or ns(get=graph_get)))
+        return await work(ns(applications=ns(by_application_id=lambda oid: applications or ns(get=graph_get))))
 
     async def fake_resolve(collector, client):
         return {"tenant_id": "t", "tenant_source": "env"}
 
+    monkeypatch.setattr(apps, "selected_object_ids", lambda *args: ["a"])
     monkeypatch.setattr(apps, "with_graph_client", fake_with_graph_client)
     monkeypatch.setattr(apps, "resolve_tenant", fake_resolve)
     monkeypatch.setattr(apps, "credential", lambda: object())
@@ -181,33 +182,19 @@ def test_main_denied_read_leaves_both_counts_null(monkeypatch, tmp_path):
     assert summary["credentials_without_lifetime"] is None
 
 
-def test_main_page_failing_midway_leaves_both_counts_null(monkeypatch, tmp_path):
-    from types import SimpleNamespace as ns
-    first = ns(value=[_application("2026-01-01T00:00:00Z", "2030-01-01T00:00:00Z")], odata_next_link="https://next")
-
-    async def fail(request_configuration=None):
-        raise Exception("Service unavailable (status 503)")
-
-    class Builder:
-        async def get(self, request_configuration=None):
-            return first
-
-        def with_url(self, url):
-            return ns(get=fail)
-
-    code, evidence = _run(monkeypatch, tmp_path, None, applications=Builder())
-    summary = (evidence.get("payload") or evidence)["summary"]
+def test_main_missing_selected_object_leaves_both_counts_null(monkeypatch, tmp_path):
+    async def missing(request_configuration=None):
+        return None
+    code, evidence = _run(monkeypatch, tmp_path, missing)
     assert code == 1
-    assert summary["total_credentials"] == 1
-    assert summary["credentials_issued_beyond_approved_lifetime"] is None
-    assert summary["credentials_without_lifetime"] is None
+    assert evidence["summary"]["credentials_issued_beyond_approved_lifetime"] is None
+    assert evidence["metadata"]["collection_completeness"]["selected_primary_reads_complete"] is False
 
 
 def test_main_complete_read_counts(monkeypatch, tmp_path, assert_summary_documented):
-    from types import SimpleNamespace as ns
 
     async def get(request_configuration=None):
-        return ns(value=[_application("2026-01-01T00:00:00Z", "2030-01-01T00:00:00Z")], odata_next_link=None)
+        return _application("2026-01-01T00:00:00Z", "2030-01-01T00:00:00Z")
 
     code, evidence = _run(monkeypatch, tmp_path, get)
     summary = (evidence.get("payload") or evidence)["summary"]

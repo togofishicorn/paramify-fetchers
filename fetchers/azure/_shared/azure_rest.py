@@ -130,20 +130,21 @@ class AzureRestClient:
             self._tokens[resource] = cached
         return cached.token
 
-    def _validate_read_url(self, url: str, resource: str) -> bool:
+    def _validate_read_url(self, url: str, resource: str, method: str) -> bool:
         """Reject untrusted targets before obtaining or sending a bearer token."""
         scoped_arm = resource == self.arm and self.arm_subscription_scope is not None
         guarded = self.arm_subscription_scope is not None or resource == self.graph
         if not guarded:
             return False
-        validate_read_url(url, resource, self.arm_subscription_scope if scoped_arm else None)
+        validate_read_url(url, resource, self.arm_subscription_scope if scoped_arm else None,
+                          allow_subscription_root=method == "get")
         return True
 
     def _send(self, method: str, url: str, resource: str, headers: Optional[Dict[str, str]] = None, **kwargs: Any):
         """One request, retried on throttling, transient 5xx and dropped connections, and a GET on a timeout."""
         import requests  # lazy
 
-        guarded = self._validate_read_url(url, resource)
+        guarded = self._validate_read_url(url, resource, method)
         if guarded:
             kwargs["allow_redirects"] = False
         timeouts = 0
@@ -476,6 +477,23 @@ def pinned_credential(subscription_id: Optional[str]):
         return DefaultAzureCredential()
     # Unpinned, the CLI mints a token for its default account, which another tenant refuses.
     return ChainedTokenCredential(AzureCliCredential(subscription=subscription_id), DefaultAzureCredential())
+
+
+def target_tenant_matches(tenant_id: Optional[str], collector: Collector, operation: str) -> bool:
+    """In strict mixed Entra collection, require each tenant read to match the configured tenant."""
+    if target_subscription_scope() is None:
+        return True
+    configured = (os.environ.get("AZURE_TENANT_ID") or "").strip()
+    if not configured:
+        message = "AZURE_TENANT_ID is required for strict subscription and Entra tenant reads"
+    elif not tenant_id:
+        message = "tenant id was not returned; no directory data will be read"
+    elif tenant_id.lower() != configured.lower():
+        message = f"tenant {tenant_id} differs from configured AZURE_TENANT_ID {configured}"
+    else:
+        return True
+    collector.record(operation, RuntimeError(message))
+    return False
 
 
 def _start(logger: logging.Logger) -> Path:

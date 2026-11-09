@@ -97,6 +97,16 @@ tenant-scoped, except `azure_entra_dormant_identities` and
 `azure_entra_emergency_accounts`, which take a subscription and read the tenant it
 belongs to.
 
+For those two subscription-and-tenant fetchers, set `config.target_subscription_only`
+to `true` with an explicit `subscription_id` and `AZURE_TENANT_ID` to enforce both
+boundaries. ARM reads and continuation links stay in that subscription and
+redirects are refused. The subscription's tenant must match `AZURE_TENANT_ID`
+before Graph is read, and Graph's organization must also match before further
+directory data is read. Missing or refused tenant reads fail closed. This option
+defaults to `false`, preserving the existing collection behavior. It does not
+change permissions, licensing or the unavailable Government service principal
+sign-in report: that failure remains visible and its dormancy fields remain null.
+
 | Permission | Needed by |
 |---|---|
 | `Application.Read.All` | `azure_entra_app_registrations`, `azure_entra_service_principals` |

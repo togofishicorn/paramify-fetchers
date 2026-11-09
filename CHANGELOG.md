@@ -12,6 +12,16 @@ schemas and the `paramify` CLI — not the internal code.
 
 ### Added
 
+- `azure_entra_emergency_accounts` 0.1.2 and `azure_entra_dormant_identities`
+  0.2.1 expose the existing opt-in `target_subscription_only` boundary. In that
+  mode, the selected subscription's tenant and Graph organization must match
+  `AZURE_TENANT_ID` before directory data is read; missing tenant reads fail
+  closed. The strict REST boundary now permits the exact subscription-root GET
+  needed for this check without permitting other methods at that root. Existing
+  foreign origin, subscription, continuation and redirect refusals remain in
+  force. Government service principal dormancy remains unknown with its original
+  API failure recorded.
+
 - VNet routing, private DNS, Application Gateway WAF, alert rules, Activity Log
   alerts and Sentinel data sources support the same optional target-subscription
   read boundary. Foreign links, policies and action-group references remain

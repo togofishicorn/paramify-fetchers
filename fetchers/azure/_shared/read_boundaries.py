@@ -22,7 +22,8 @@ def target_subscription_scope() -> Optional[str]:
 
 
 def validate_read_url(
-    url: str, resource: str, subscription_scope: Optional[str] = None
+    url: str, resource: str, subscription_scope: Optional[str] = None,
+    *, allow_subscription_root: bool = False,
 ) -> None:
     """Validate an authenticated read before a native transport obtains a token."""
     target, origin = urlsplit(url), urlsplit(resource)
@@ -44,7 +45,10 @@ def validate_read_url(
                 not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
                 for c in scope
             )
-            or not path.lower().startswith(f"/subscriptions/{scope}/".lower())
+            or not (
+                path.lower().startswith(f"/subscriptions/{scope}/".lower())
+                or (allow_subscription_root and path.lower() == f"/subscriptions/{scope}".lower())
+            )
             or any(part in (".", "..") for part in path.split("/"))
             or "\\" in path
             or "%" in path

@@ -1,5 +1,5 @@
 name: azure_key_vault_key_rotation
-version: 0.5.0
+version: 0.5.1
 description: >-
   Shows whether Key Vault keys rotate, whether keys and secrets have an expiry and when certificates expire, whether certificates renew themselves, and where each App Service certificate comes from.
 category: azure

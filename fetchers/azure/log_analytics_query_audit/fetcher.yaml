@@ -1,5 +1,5 @@
 name: azure_log_analytics_query_audit
-version: 0.2.0
+version: 0.3.0
 description: >
   For every Log Analytics workspace in the subscription, Sentinel or not: whether
   query auditing is on (a diagnostic setting exporting the workspace's Audit
@@ -52,6 +52,12 @@ target_schema:
       subscription.
 
 config_schema:
+  target_subscription_only:
+    type: boolean
+    required: false
+    default: false
+    env: AZURE_TARGET_SUBSCRIPTION_ONLY
+    description: Reject ARM reads outside the explicit target subscription and reject HTTP redirects. Foreign references remain retained metadata; an attempted foreign read records a collection failure.
   query_audit_lookback_days:
     type: integer
     required: false

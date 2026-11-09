@@ -1,5 +1,5 @@
 name: azure_bastion_configuration
-version: 0.1.0
+version: 0.2.0
 description: >-
   Shows how each Azure Bastion host is configured and logged, and which virtual machines a Bastion can reach, so administrative access needs no exposed port.
 category: azure
@@ -30,6 +30,12 @@ target_schema:
     description: Deployment environment label (e.g. prod) written into the evidence metadata.
 
 config_schema:
+  target_subscription_only:
+    type: boolean
+    required: false
+    default: false
+    env: AZURE_TARGET_SUBSCRIPTION_ONLY
+    description: Reject ARM reads outside the explicit target subscription and reject HTTP redirects. Foreign references remain retained metadata; an attempted foreign read records a collection failure.
   resource_exclusions:
     type: patterns
     prefixes: [rg, location, id]

@@ -1,5 +1,5 @@
 name: azure_sentinel_incidents
-version: 0.3.0
+version: 0.4.0
 description: >-
   Shows each Sentinel workspace's recent and open incidents with their response
   timeline, entities and owner, plus monthly detection, acknowledgement and
@@ -41,6 +41,12 @@ target_schema:
       subscription.
 
 config_schema:
+  target_subscription_only:
+    type: boolean
+    required: false
+    default: false
+    env: AZURE_TARGET_SUBSCRIPTION_ONLY
+    description: Reject ARM reads outside the explicit target subscription and reject HTTP redirects. Foreign references remain retained metadata; an attempted foreign read records a collection failure.
   incident_lookback_days:
     type: integer
     required: false

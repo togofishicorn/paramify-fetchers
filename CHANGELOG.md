@@ -12,6 +12,15 @@ schemas and the `paramify` CLI — not the internal code.
 
 ### Added
 
+- Azure REST evidence sources can opt into `target_subscription_only` with an
+  explicit subscription. The existing telemetry boundary now covers ARM GET and
+  read-action POST paths, paging, and Log Analytics redirects. Foreign references
+  remain in original records and attempted foreign reads fail; they are not excluded.
+  Graph REST paging always validates its origin and rejects redirects and cycles.
+- Key Vault rotation's missing-URI fallback now uses the selected sovereign cloud.
+  Service Health uses stable API `2025-04-01` in Azure Government, which does not
+  advertise the otherwise retained `2025-05-01` version.
+
 - **`azure_devops_work_items` 0.2.0: approval comments that start with an @mention, and the approved percentage.**
   - **`approval_mentions`** (`AZURE_DEVOPS_APPROVAL_MENTIONS`, `false` by
     default). Set to `true`, a comment line that starts with one or more

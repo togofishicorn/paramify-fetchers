@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from urllib.parse import unquote, urlsplit
 
 from azure_common import (
     Collector,
@@ -105,6 +106,17 @@ def _error_parts(response) -> tuple:
     return err.get("code") or response.reason or "Error", err.get("message") or response.text[:500]
 
 
+def target_subscription_scope() -> Optional[str]:
+    """The existing typed opt-in requires an explicit target before authentication."""
+    strict = os.environ.get("AZURE_TARGET_SUBSCRIPTION_ONLY", "false").strip().lower()
+    if strict not in ("true", "false"):
+        raise ValueError("AZURE_TARGET_SUBSCRIPTION_ONLY must be true or false")
+    scope = (os.environ.get("AZURE_SUBSCRIPTION_ID") or "").strip()
+    if strict == "true" and not scope:
+        raise ValueError("AZURE_SUBSCRIPTION_ID is required with AZURE_TARGET_SUBSCRIPTION_ONLY")
+    return scope if strict == "true" else None
+
+
 class AzureRestClient:
     """Bearer-token REST calls to ARM, Microsoft Graph and the Log Analytics query API."""
 
@@ -117,6 +129,8 @@ class AzureRestClient:
         self.logs = logs_endpoint()
         self.graph = graph_host()
         self._tokens: Dict[str, Any] = {}
+        # Reuses the opt-in boundary from the earlier Azure telemetry implementation.
+        self.arm_subscription_scope: Optional[str] = target_subscription_scope()
 
     def _token(self, resource: str) -> str:
         cached = self._tokens.get(resource)
@@ -125,10 +139,33 @@ class AzureRestClient:
             self._tokens[resource] = cached
         return cached.token
 
+    def _validate_read_url(self, url: str, resource: str) -> bool:
+        """Reject untrusted targets before obtaining or sending a bearer token."""
+        scoped_arm = resource == self.arm and self.arm_subscription_scope is not None
+        guarded = self.arm_subscription_scope is not None or resource == self.graph
+        if not guarded:
+            return False
+        target, origin = urlsplit(url), urlsplit(resource)
+        if (target.scheme != "https" or target.netloc.lower() != origin.netloc.lower()
+                or target.username is not None or target.password is not None or target.fragment):
+            raise ValueError("Read origin is untrusted")
+        if scoped_arm:
+            scope = self.arm_subscription_scope or ""
+            path = unquote(target.path)
+            if (not scope or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-" for c in scope)
+                    or not path.lower().startswith(f"/subscriptions/{scope}/".lower())
+                    or any(part in (".", "..") for part in path.split("/")) or "\\" in path
+                    or "%" in path):
+                raise ValueError("ARM read scope: path is outside the explicit subscription")
+        return True
+
     def _send(self, method: str, url: str, resource: str, headers: Optional[Dict[str, str]] = None, **kwargs: Any):
         """One request, retried on throttling, transient 5xx and dropped connections, and a GET on a timeout."""
         import requests  # lazy
 
+        guarded = self._validate_read_url(url, resource)
+        if guarded:
+            kwargs["allow_redirects"] = False
         timeouts = 0
         for attempt in range(MAX_RETRIES + 1):
             sent = {"Authorization": f"Bearer {self._token(resource)}", **(headers or {})}
@@ -147,6 +184,8 @@ class AzureRestClient:
                 _LOGGER.warning("%s %s timed out; retrying", method.upper(), url.split("?")[0])
                 time.sleep(float(min(2 ** attempt, MAX_RETRY_WAIT)))
                 continue
+            if guarded and 300 <= response.status_code < 400:
+                raise ArmError(response.status_code, "Redirect", "Read returned a redirect; not followed")
             if response.status_code not in RETRY_STATUSES or attempt == MAX_RETRIES:
                 return response
             wait = retry_wait(response, attempt)
@@ -169,8 +208,13 @@ class AzureRestClient:
 
     def _follow(self, body: Dict[str, Any]) -> List[Dict[str, Any]]:
         items = list(body.get("value") or [])
+        seen = set()
         while body.get("nextLink"):
-            body = self._get(body["nextLink"])
+            link = body["nextLink"]
+            if self.arm_subscription_scope is not None and link in seen:
+                raise ValueError("ARM read scope: paging did not terminate")
+            seen.add(link)
+            body = self._get(link)
             items.extend(body.get("value") or [])
         return items
 
@@ -194,8 +238,13 @@ class AzureRestClient:
         """Each page of a Microsoft Graph collection in turn, following @odata.nextLink."""
         body = self._get(f"{self.graph}/{version}{path}", params, self.graph)
         yield list(body.get("value") or [])
+        seen = {f"{self.graph}/{version}{path}"}
         while body.get("@odata.nextLink"):
-            body = self._get(body["@odata.nextLink"], resource=self.graph)
+            link = body["@odata.nextLink"]
+            if link in seen:
+                raise ValueError("Graph paging did not terminate")
+            seen.add(link)
+            body = self._get(link, resource=self.graph)
             yield list(body.get("value") or [])
 
     def graph_list(
@@ -478,6 +527,7 @@ Collect = Callable[[AzureRestClient, str, Collector], tuple]
 
 def run_subscription(*, fetcher: str, logger: logging.Logger, collect: Collect, session: Any = None) -> int:
     """Resolve the subscription, run `collect(client, subscription_id, collector) -> (results, summary)`, write evidence."""
+    scope = target_subscription_scope()
     output_dir = _start(logger)
     collector = Collector(logger)
     sub = resolve_subscription(collector)
@@ -488,7 +538,11 @@ def run_subscription(*, fetcher: str, logger: logging.Logger, collect: Collect, 
     summary: Dict[str, Any] = {}
     if subscription_id and cred is not None:
         client = AzureRestClient(cred, session)
+        if scope is not None:
+            client.arm_subscription_scope = subscription_id
         results, summary = collect(client, subscription_id, collector)
+        if scope is not None:
+            results["read_scope"] = "target_subscription"
     elif not subscription_id:
         collector.record(
             "resolve_subscription",

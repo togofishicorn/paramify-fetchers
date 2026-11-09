@@ -1,5 +1,5 @@
 name: azure_vnet_egress_routing
-version: 0.3.0
+version: 0.4.0
 description: >
   Where each subnet's Internet-bound traffic goes: through a firewall or network
   virtual appliance, into a black hole, to a VPN/ExpressRoute gateway, out a NAT
@@ -41,6 +41,12 @@ target_schema:
       metadata. Optional — set per target for multi-subscription runs.
 
 config_schema:
+  target_subscription_only:
+    type: boolean
+    required: false
+    default: false
+    env: AZURE_TARGET_SUBSCRIPTION_ONLY
+    description: Limit source reads to the explicit subscription. Foreign relationships and unmeasured connector queries remain unknown observations, never removed or relabeled absent.
   virtual_hub_search_max_subscriptions:
     type: integer
     required: false

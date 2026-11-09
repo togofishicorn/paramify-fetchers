@@ -1,5 +1,5 @@
 name: azure_app_gateway_waf
-version: 0.2.0
+version: 0.3.0
 description: >
   Web application firewall enforcement on every Azure Application Gateway in the
   subscription: for each HTTP(S) listener, the WAF that actually applies to it
@@ -11,6 +11,12 @@ description: >
 category: azure
 
 config_schema:
+  target_subscription_only:
+    type: boolean
+    required: false
+    default: false
+    env: AZURE_TARGET_SUBSCRIPTION_ONLY
+    description: Limit source reads to the explicit subscription. Foreign relationships and unmeasured connector queries remain unknown observations, never removed or relabeled absent.
   resource_exclusions:
     type: patterns
     prefixes: [rg, location, id]

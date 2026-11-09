@@ -12,6 +12,15 @@ schemas and the `paramify` CLI — not the internal code.
 
 ### Added
 
+- VNet routing, private DNS, Application Gateway WAF, alert rules, Activity Log
+  alerts and Sentinel data sources support the same optional target-subscription
+  read boundary. Foreign links, policies and action-group references remain
+  unknown source observations instead of being read or declared absent.
+- In that opt-in Sentinel mode, service-provided last-data KQL is retained with
+  its native text/hash and remains unmeasured when its scope is unverified.
+  Existing local table observations and native fixed built-in queries continue;
+  source-supplied KQL is not executed to discover whether it crosses a boundary.
+
 - Azure REST evidence sources can opt into `target_subscription_only` with an
   explicit subscription. The existing telemetry boundary now covers ARM GET and
   read-action POST paths, paging, and Log Analytics redirects. Foreign references

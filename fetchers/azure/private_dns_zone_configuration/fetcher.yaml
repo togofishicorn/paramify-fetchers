@@ -1,5 +1,5 @@
 name: azure_private_dns_zone_configuration
-version: 0.4.0
+version: 0.5.0
 description: >
   Inventories Azure private DNS zones (Microsoft.Network/privateDnsZones) in the subscription. For
   every zone: its virtual network links (auto-registration, resolution policy, link state, and
@@ -10,6 +10,12 @@ description: >
 category: azure
 
 config_schema:
+  target_subscription_only:
+    type: boolean
+    required: false
+    default: false
+    env: AZURE_TARGET_SUBSCRIPTION_ONLY
+    description: Limit source reads to the explicit subscription. Foreign relationships and unmeasured connector queries remain unknown observations, never removed or relabeled absent.
   resource_exclusions:
     type: patterns
     prefixes: [rg, location, id]

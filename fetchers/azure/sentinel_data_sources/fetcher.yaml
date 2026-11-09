@@ -1,5 +1,5 @@
 name: azure_sentinel_data_sources
-version: 0.4.0
+version: 0.5.0
 description: >-
   Shows which log sources and data connectors sent data to each Sentinel
   workspace in the ingestion window (14 days by default), with each
@@ -41,6 +41,12 @@ target_schema:
       subscription.
 
 config_schema:
+  target_subscription_only:
+    type: boolean
+    required: false
+    default: false
+    env: AZURE_TARGET_SUBSCRIPTION_ONLY
+    description: Limit source reads to the explicit subscription. Foreign relationships and unmeasured connector queries remain unknown observations, never removed or relabeled absent.
   ingestion_window_days:
     type: integer
     required: false

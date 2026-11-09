@@ -11,6 +11,17 @@ description: >
 category: azure
 
 config_schema:
+  target_subscription_only:
+    type: boolean
+    required: false
+    default: false
+    env: AZURE_TARGET_SUBSCRIPTION_ONLY
+    description: >
+      Reject ARM SDK/REST requests and continuations outside the explicit target
+      subscription and reject redirects. The Resource Graph read POST requires
+      exactly that subscription in every request body. Out-of-scope inherited
+      role definitions fail instead of authorizing a wider read. Graph reads
+      retain their separate configured tenant and Government origin boundary.
   resource_exclusions:
     type: patterns
     prefixes: [rg, location, id]

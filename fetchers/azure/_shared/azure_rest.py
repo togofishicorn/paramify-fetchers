@@ -8,7 +8,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
-from urllib.parse import unquote, urlsplit
 
 from azure_common import (
     Collector,
@@ -25,6 +24,7 @@ from azure_common import (
     write_evidence,
 )
 from entra_graph import graph_host
+from read_boundaries import target_subscription_scope, validate_read_url
 from resource_exclusions import ResourceExclusions
 
 SI_API = "2025-09-01"
@@ -106,15 +106,6 @@ def _error_parts(response) -> tuple:
     return err.get("code") or response.reason or "Error", err.get("message") or response.text[:500]
 
 
-def target_subscription_scope() -> Optional[str]:
-    """The existing typed opt-in requires an explicit target before authentication."""
-    strict = os.environ.get("AZURE_TARGET_SUBSCRIPTION_ONLY", "false").strip().lower()
-    if strict not in ("true", "false"):
-        raise ValueError("AZURE_TARGET_SUBSCRIPTION_ONLY must be true or false")
-    scope = (os.environ.get("AZURE_SUBSCRIPTION_ID") or "").strip()
-    if strict == "true" and not scope:
-        raise ValueError("AZURE_SUBSCRIPTION_ID is required with AZURE_TARGET_SUBSCRIPTION_ONLY")
-    return scope if strict == "true" else None
 
 
 class AzureRestClient:
@@ -145,18 +136,7 @@ class AzureRestClient:
         guarded = self.arm_subscription_scope is not None or resource == self.graph
         if not guarded:
             return False
-        target, origin = urlsplit(url), urlsplit(resource)
-        if (target.scheme != "https" or target.netloc.lower() != origin.netloc.lower()
-                or target.username is not None or target.password is not None or target.fragment):
-            raise ValueError("Read origin is untrusted")
-        if scoped_arm:
-            scope = self.arm_subscription_scope or ""
-            path = unquote(target.path)
-            if (not scope or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-" for c in scope)
-                    or not path.lower().startswith(f"/subscriptions/{scope}/".lower())
-                    or any(part in (".", "..") for part in path.split("/")) or "\\" in path
-                    or "%" in path):
-                raise ValueError("ARM read scope: path is outside the explicit subscription")
+        validate_read_url(url, resource, self.arm_subscription_scope if scoped_arm else None)
         return True
 
     def _send(self, method: str, url: str, resource: str, headers: Optional[Dict[str, str]] = None, **kwargs: Any):

@@ -154,3 +154,28 @@ def test_firewall_referenced_policy_cannot_cross_selected_subscription(monkeypat
     assert results['foreign_firewall_policies']==[]
     assert summary['firewalls_with_rules_unread']==1
     assert all('/subscriptions/00000000-0000-0000-0000-000000000002/' not in call.args[0] for call in session.get.call_args_list)
+
+
+def test_scoped_rest_rejects_resource_graph_root_before_token(monkeypatch):
+    native,cred,session=client(monkeypatch)
+    with pytest.raises(ValueError,match='subscription'):
+        native.post('/providers/Microsoft.ResourceGraph/resources','2022-10-01')
+    cred.get_token.assert_not_called();session.post.assert_not_called()
+
+
+def test_changed_resource_graph_sources_use_sdk_with_explicit_subscription(monkeypatch):
+    import logging
+    from azure_common import Collector
+    from resource_graph import query_all
+    sdk=Mock()
+    sdk.resources.return_value=SimpleNamespace(data=[],total_records=0,skip_token=None)
+    assert query_all(sdk,SUB,'Resources | project id')['rows']==[]
+    assert sdk.resources.call_args.args[0].subscriptions==[SUB]
+    for name in ('service_health_advisories','resource_diagnostic_settings'):
+        source=load(name)
+        factory=Mock(return_value=sdk);query=Mock(return_value={'rows':[],'total_records':0,'pages':1})
+        monkeypatch.setattr(source,'resource_graph_client',factory);monkeypatch.setattr(source,'query_all',query)
+        if name=='service_health_advisories':source.graph_rows(object(),SUB,source.EVENTS_QUERY)
+        else:source.enumerate_resources(SUB,object(),Collector(logging.getLogger('boundary-arg')))
+        assert query.call_args.args[0] is sdk
+        assert query.call_args.args[1]==SUB

@@ -5,6 +5,12 @@ description: >-
 category: azure
 
 config_schema:
+  target_subscription_only:
+    type: boolean
+    required: false
+    default: false
+    env: AZURE_TARGET_SUBSCRIPTION_ONLY
+    description: Limit source reads to the explicit subscription; foreign workspace reads fail before authentication and leave their observations unknown.
   lookback_days:
     type: integer
     required: false
